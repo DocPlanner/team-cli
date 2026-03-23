@@ -1,0 +1,34 @@
+# TEAM CLI configuration
+# Copy to ~/.config/team-cli/config.toml and fill in your deployment values,
+# or run `team configure` to set up interactively.
+
+[cognito]
+domain = "https://YOUR_DOMAIN.auth.REGION.amazoncognito.com"
+client_id = "YOUR_COGNITO_CLIENT_ID"
+user_pool_id = "REGION_PoolId"
+identity_provider = "IDC"
+scopes = ["aws.cognito.signin.user.admin", "email", "openid", "phone", "profile"]
+
+[appsync]
+endpoint = "https://YOUR_ID.appsync-api.REGION.amazonaws.com/graphql"
+
+[aws]
+region = "eu-north-1"
+
+# Optional: only needed for `team sync`
+[sync]
+sso_session_name = "my-org"
+sso_start_url = "https://my-org.awsapps.com/start"
+sso_region = "eu-north-1"
+default_region = "eu-central-1"
+
+# Map TEAM permission set names to profile suffix
+# Only listed permission sets generate AWS CLI profiles
+# "" = no suffix (daily profile), "-bg" = breakglass suffix
+[sync.profile_map]
+ReadOnly = ""
+AdministratorAccess = "-bg"
+
+# Optional: per-account region overrides
+# [sync.account_overrides.my-account-name]
+# region = "us-east-1"
