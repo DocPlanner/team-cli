@@ -106,21 +106,31 @@ team request --account my-account --role ReadOnly --duration 2 --justification "
 | `--justification`, `-j` | Business justification (required) |
 | `--ticket`, `-t` | Ticket number |
 | `--start`, `-s` | Start time in ISO format (default: now) |
+| `--wait`, `-w` | Wait for request to reach a terminal state (for scripting) |
+| `--wait-timeout` | Max seconds to wait (default: 600) |
 
 In interactive mode, you can select multiple accounts and reuse the same justification across them.
+
+The `--wait` flag blocks until the request is approved, rejected, or otherwise resolved. Exit code 0 for approved/in-progress, 1 for rejected/error, 2 for timeout. When piped, outputs final request state as JSON.
 
 ### Check request status
 
 ```bash
 team requests            # list all your requests
 team status <request-id> # detailed view of a single request
+team pending             # list requests awaiting your approval
 ```
 
-### Approve requests
+### Approve, reject, revoke, cancel
 
 ```bash
-team approve <request-id>
-team approve <request-id> --comment "Looks good"
+team approve <request-id>                    # approve pending request
+team approve <request-id> --comment "LGTM"   # with comment
+team reject <request-id>                     # reject pending request
+team reject <request-id> -c "Not justified"  # with reason
+team revoke <request-id>                     # revoke active session
+team revoke <request-id> -c "Security event" # with reason
+team cancel <request-id>                     # cancel own pending request
 ```
 
 ### Audit elevation requests

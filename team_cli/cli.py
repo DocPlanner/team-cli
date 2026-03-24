@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 from team_cli.auth import require_auth, get_user_info, login as auth_login, get_valid_tokens, clear_tokens
 from team_cli.api import (
-    get_user_policy, get_requests_by_email, get_request,
-    create_request, update_request, validate_request, get_settings,
-    AuthExpiredError,
+    get_user_policy, get_requests_by_email, get_requests_by_approver,
+    get_request, create_request, update_request, validate_request,
+    get_settings, AuthExpiredError,
 )
 from team_cli.config import CONFIG_FILE, load_config, save_config, get_config
 from team_cli.interactive import (
@@ -194,6 +194,40 @@ def _get_permissions_for_account(account_id: str, policy: list[dict]) -> list[di
     return list(perms.values())
 
 
+def _poll_request(request_id: str, tokens: dict, timeout: int = 600, interval: int = 5) -> dict:
+    """Poll a request until it reaches a terminal state or timeout."""
+    import time as _time
+
+    terminal = {"approved", "rejected", "cancelled", "expired", "error",
+                "in progress", "ended", "revoked"}
+    status = "pending"
+    elapsed = 0
+
+    while elapsed < timeout:
+        req = get_request(request_id, tokens)
+        status = (req.get("status") or "").lower()
+        if status in terminal:
+            print(file=sys.stderr)  # clear the progress line
+            return req
+        remaining = timeout - elapsed
+        print(f"\r⏳ Waiting for approval... {remaining}s remaining  ",
+              end="", file=sys.stderr, flush=True)
+        _time.sleep(interval)
+        elapsed += interval
+        # Refresh tokens in case they expire during long waits
+        try:
+            refreshed = get_valid_tokens()
+            if refreshed:
+                tokens.update(refreshed)
+        except Exception:
+            pass
+
+    print(file=sys.stderr)
+    print(f"Timed out after {timeout}s. Request {request_id} still {status}.",
+          file=sys.stderr)
+    sys.exit(2)
+
+
 def _request_flag_mode(args, tokens, user, policy, all_accounts, max_duration):
     """Handle request creation via CLI flags."""
     account = _find_account(args.account, all_accounts)
@@ -234,7 +268,26 @@ def _request_flag_mode(args, tokens, user, policy, all_accounts, max_duration):
     ticket = args.ticket or ""
     start_time = args.start or datetime.now(timezone.utc).isoformat()
 
-    _submit_request(tokens, user, account, role, duration, start_time, justification, ticket)
+    result = _submit_request(tokens, user, account, role, duration, start_time, justification, ticket)
+
+    if args.wait and result and result.get("id"):
+        _wait_for_request(result["id"], tokens, args.wait_timeout)
+
+
+def _wait_for_request(request_id: str, tokens: dict, timeout: int):
+    """Wait for a request and output final state."""
+    final = _poll_request(request_id, tokens, timeout=timeout)
+    status = (final.get("status") or "").lower()
+
+    if not sys.stdout.isatty():
+        import json as json_mod
+        print(json_mod.dumps(final, indent=2))
+    else:
+        print(format_request_detail(final))
+
+    success = {"approved", "in progress"}
+    if status not in success:
+        sys.exit(1)
 
 
 def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, args):
@@ -274,6 +327,7 @@ def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, 
 
     print(f"\nCreating {len(selected_accounts)} request(s)...")
 
+    results = []
     for i, acct in enumerate(selected_accounts):
         if prev_justification is None:
             # First account or user wants different justification
@@ -299,7 +353,16 @@ def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, 
             prev_justification = justification
             prev_ticket = ticket
 
-        _submit_request(tokens, user, acct, role, duration, start_time, justification, ticket)
+        result = _submit_request(tokens, user, acct, role, duration, start_time, justification, ticket)
+        if result:
+            results.append(result)
+
+    if args.wait and results:
+        if len(results) == 1:
+            _wait_for_request(results[0]["id"], tokens, args.wait_timeout)
+        else:
+            print("\n--wait is only supported for single-account requests. "
+                  "Use `team status <id>` to check individual requests.", file=sys.stderr)
 
 
 def _submit_request(tokens, user, account, role, duration, start_time, justification, ticket):
@@ -311,7 +374,7 @@ def _submit_request(tokens, user, account, role, duration, start_time, justifica
         )
         if not validation.get("valid"):
             print(f"  ✗ {account['name']} → denied: {validation.get('reason', 'unknown')}")
-            return
+            return None
     except Exception as e:
         print(f"  ⚠ {account['name']} → validation failed: {e}")
         # Continue anyway — server-side validation will catch issues
@@ -331,8 +394,10 @@ def _submit_request(tokens, user, account, role, duration, start_time, justifica
         req_id = result.get("id", "unknown")
         status = result.get("status", "pending")
         print(f"  ✓ {account['name']} → {status} (id: {req_id})")
+        return result
     except Exception as e:
         print(f"  ✗ {account['name']} → failed: {e}")
+        return None
 
 
 def cmd_requests(args):
@@ -388,6 +453,105 @@ def cmd_approve(args):
     }, tokens)
 
     print(f"✓ Request {args.request_id} approved")
+
+
+def cmd_reject(args):
+    """team reject — reject a pending request."""
+    tokens = _ensure_tokens()
+    user = get_user_info(tokens)
+
+    with with_spinner("Fetching request..."):
+        req = get_request(args.request_id, tokens)
+
+    if not req:
+        print(f"Request not found: {args.request_id}", file=sys.stderr)
+        sys.exit(1)
+
+    if req.get("status", "").lower() != "pending":
+        print(f"Request is not pending (status: {req.get('status')})", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Rejecting request from {req.get('email', '')} for {req.get('accountName', '')} / {req.get('role', '')}")
+
+    update_request({
+        "id": args.request_id,
+        "status": "rejected",
+        "approver": user["email"],
+        "approverId": user["user_id"],
+        "comment": args.comment or "",
+    }, tokens)
+
+    print(f"✓ Request {args.request_id} rejected")
+
+
+def cmd_revoke(args):
+    """team revoke — revoke an active/approved request."""
+    tokens = _ensure_tokens()
+
+    with with_spinner("Fetching request..."):
+        req = get_request(args.request_id, tokens)
+
+    if not req:
+        print(f"Request not found: {args.request_id}", file=sys.stderr)
+        sys.exit(1)
+
+    revocable = {"approved", "scheduled", "in progress"}
+    current = req.get("status", "").lower()
+    if current not in revocable:
+        print(f"Request cannot be revoked (status: {req.get('status')}). "
+              f"Revocable statuses: {', '.join(sorted(revocable))}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Revoking request from {req.get('email', '')} for {req.get('accountName', '')} / {req.get('role', '')}")
+
+    update_request({
+        "id": args.request_id,
+        "status": "revoked",
+        "revokeComment": args.comment or "",
+    }, tokens)
+
+    print(f"✓ Request {args.request_id} revoked")
+
+
+def cmd_cancel(args):
+    """team cancel — cancel own pending request."""
+    tokens = _ensure_tokens()
+    user = get_user_info(tokens)
+
+    with with_spinner("Fetching request..."):
+        req = get_request(args.request_id, tokens)
+
+    if not req:
+        print(f"Request not found: {args.request_id}", file=sys.stderr)
+        sys.exit(1)
+
+    if req.get("status", "").lower() != "pending":
+        print(f"Request is not pending (status: {req.get('status')})", file=sys.stderr)
+        sys.exit(1)
+
+    if req.get("email", "").lower() != user["email"].lower():
+        print(f"Cannot cancel another user's request (owner: {req.get('email')})", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Cancelling request for {req.get('accountName', '')} / {req.get('role', '')}")
+
+    update_request({
+        "id": args.request_id,
+        "status": "cancelled",
+    }, tokens)
+
+    print(f"✓ Request {args.request_id} cancelled")
+
+
+def cmd_pending(args):
+    """team pending — list requests awaiting my approval."""
+    tokens = _ensure_tokens()
+    user = get_user_info(tokens)
+
+    with with_spinner("Fetching pending requests..."):
+        reqs = get_requests_by_approver(user["user_id"], tokens, status={"eq": "pending"})
+
+    print(format_request_table(reqs))
 
 
 def cmd_sync(args):
@@ -612,6 +776,10 @@ def build_parser() -> argparse.ArgumentParser:
     req_parser.add_argument("--justification", "-j", help="Business justification")
     req_parser.add_argument("--ticket", "-t", help="Ticket number")
     req_parser.add_argument("--start", "-s", help="Start time (ISO format, default: now)")
+    req_parser.add_argument("--wait", "-w", action="store_true",
+                            help="Wait for request to reach a terminal state")
+    req_parser.add_argument("--wait-timeout", type=int, default=600,
+                            help="Max seconds to wait (default: 600)")
 
     # requests
     sub.add_parser("requests", help="List my requests")
@@ -624,6 +792,23 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser = sub.add_parser("approve", help="Approve a pending request")
     approve_parser.add_argument("request_id", help="Request ID")
     approve_parser.add_argument("--comment", "-c", help="Approval comment")
+
+    # reject
+    reject_parser = sub.add_parser("reject", help="Reject a pending request")
+    reject_parser.add_argument("request_id", help="Request ID")
+    reject_parser.add_argument("--comment", "-c", help="Rejection reason")
+
+    # revoke
+    revoke_parser = sub.add_parser("revoke", help="Revoke an active/approved request")
+    revoke_parser.add_argument("request_id", help="Request ID")
+    revoke_parser.add_argument("--comment", "-c", help="Revoke reason")
+
+    # cancel
+    cancel_parser = sub.add_parser("cancel", help="Cancel own pending request")
+    cancel_parser.add_argument("request_id", help="Request ID")
+
+    # pending
+    sub.add_parser("pending", help="List requests awaiting my approval")
 
     # audit
     audit_parser = sub.add_parser("audit", help="Audit elevation requests with CloudTrail events")
@@ -657,6 +842,10 @@ COMMANDS = {
     "requests": cmd_requests,
     "status": cmd_status,
     "approve": cmd_approve,
+    "reject": cmd_reject,
+    "revoke": cmd_revoke,
+    "cancel": cmd_cancel,
+    "pending": cmd_pending,
     "audit": cmd_audit,
     "sync": cmd_sync,
     "configure": cmd_configure,
