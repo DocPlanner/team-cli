@@ -53,6 +53,9 @@ query RequestByEmailAndStatus(
       approverId
       approvers
       approver_ids
+      revoker
+      revokerId
+      revokeComment
       endTime
       ticketNo
       createdAt
@@ -82,6 +85,9 @@ query GetRequests($id: ID!) {
     approverId
     approvers
     approver_ids
+    revoker
+    revokerId
+    revokeComment
     endTime
     ticketNo
     createdAt
@@ -184,6 +190,9 @@ mutation UpdateRequests($input: UpdateRequestsInput!) {
     comment
     approver
     approverId
+    revokeComment
+    revoker
+    revokerId
     updatedAt
   }
 }
@@ -252,6 +261,48 @@ GET_LOGS = """
 query GetLogs($queryId: String) {
   getLogs(queryId: $queryId) {
     eventName eventSource eventID eventTime
+  }
+}
+"""
+
+REQUEST_BY_APPROVER_AND_STATUS = """
+query RequestByApproverAndStatus(
+  $approverId: String!
+  $status: ModelStringKeyConditionInput
+  $sortDirection: ModelSortDirection
+  $limit: Int
+  $nextToken: String
+) {
+  requestByApproverAndStatus(
+    approverId: $approverId
+    status: $status
+    sortDirection: $sortDirection
+    limit: $limit
+    nextToken: $nextToken
+  ) {
+    items {
+      id
+      email
+      accountId
+      accountName
+      role
+      roleId
+      startTime
+      duration
+      justification
+      status
+      comment
+      username
+      approver
+      approverId
+      approvers
+      approver_ids
+      endTime
+      ticketNo
+      createdAt
+      updatedAt
+    }
+    nextToken
   }
 }
 """

@@ -158,6 +158,9 @@ def format_request_table(requests_list: list[dict]) -> str:
         "approved": "✅",
         "rejected": "❌",
         "revoked": "🔄",
+        "cancelled": "🚫",
+        "in progress": "⏩",
+        "scheduled": "📅",
         "ended": "⏹",
         "expired": "💤",
     }
@@ -184,7 +187,8 @@ def format_request_detail(r: dict) -> str:
     """Format a single request as detailed view."""
     status_icon = {
         "pending": "⏳", "approved": "✅", "rejected": "❌",
-        "revoked": "🔄", "ended": "⏹", "expired": "💤",
+        "revoked": "🔄", "cancelled": "🚫", "in progress": "⏩",
+        "scheduled": "📅", "ended": "⏹", "expired": "💤",
     }
     status = r.get("status", "unknown")
     icon = status_icon.get(status.lower(), "?")
@@ -206,6 +210,10 @@ def format_request_detail(r: dict) -> str:
         lines.append(f"Approver: {r.get('approver', '')}")
     if r.get("comment"):
         lines.append(f"Comment: {r.get('comment', '')}")
+    if r.get("revoker"):
+        lines.append(f"Revoker: {r.get('revoker', '')}")
+    if r.get("revokeComment"):
+        lines.append(f"Revoke reason: {r.get('revokeComment', '')}")
 
     lines.append(f"Created: {r.get('createdAt', '')}")
     lines.append(f"Updated: {r.get('updatedAt', '')}")

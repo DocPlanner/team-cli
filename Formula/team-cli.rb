@@ -4,7 +4,7 @@ class TeamCli < Formula
   desc "CLI for AWS TEAM (Temporary Elevated Access Management)"
   homepage "https://github.com/DocPlanner/team-cli"
   url "https://github.com/DocPlanner/team-cli.git", branch: "main"
-  version "0.1.0"
+  version "0.2.0"
 
 
   depends_on "python@3.11"

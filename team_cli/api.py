@@ -140,6 +140,26 @@ def get_requests_by_email(email: str, tokens: dict, status: dict | None = None) 
     return items
 
 
+def get_requests_by_approver(approver_id: str, tokens: dict, status: dict | None = None) -> list:
+    """Fetch requests assigned to an approver, with optional status filter. Paginates automatically."""
+    from team_cli.queries import REQUEST_BY_APPROVER_AND_STATUS
+    items = []
+    next_token = None
+    while True:
+        variables = {"approverId": approver_id, "limit": 50}
+        if status:
+            variables["status"] = status
+        if next_token:
+            variables["nextToken"] = next_token
+        data = execute(REQUEST_BY_APPROVER_AND_STATUS, variables, tokens)
+        result = data.get("requestByApproverAndStatus", {})
+        items.extend(result.get("items", []))
+        next_token = result.get("nextToken")
+        if not next_token:
+            break
+    return items
+
+
 def get_request(request_id: str, tokens: dict) -> dict:
     """Fetch a single request by ID."""
     from team_cli.queries import GET_REQUESTS
