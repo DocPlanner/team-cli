@@ -37,44 +37,79 @@ def select_accounts(accounts: list[dict]) -> list[dict]:
     """Interactive multi-select for accounts."""
     try:
         from InquirerPy import inquirer
+        choices = [
+            {"name": f"{a['name']} ({a['id']})", "value": a}
+            for a in accounts
+        ]
+        return inquirer.fuzzy(
+            message="Select accounts (type to search, tab to toggle, enter to confirm):",
+            choices=choices,
+            multiselect=True,
+            prompt="> ",
+            validate=lambda result: len(result) > 0,
+            invalid_message="Select at least one account",
+        ).execute()
     except ImportError:
-        print("InquirerPy not installed. Use --account flag instead, or: pip install InquirerPy")
-        sys.exit(1)
+        # Fallback: numbered menu
+        print("\nSelect accounts (comma-separated numbers):")
+        for i, a in enumerate(accounts):
+            print(f"  {i + 1}. {a['name']} ({a['id']})")
+        val = input("> ").strip()
+        selected = []
+        for part in val.split(","):
+            try:
+                idx = int(part.strip()) - 1
+                if 0 <= idx < len(accounts):
+                    selected.append(accounts[idx])
+            except ValueError:
+                pass
+        if not selected:
+            print("No accounts selected.")
+            sys.exit(1)
+        return selected
 
-    choices = [
-        {"name": f"{a['name']} ({a['id']})", "value": a}
-        for a in accounts
-    ]
 
-    selected = inquirer.checkbox(
-        message="Select accounts (space to toggle, enter to confirm):",
-        choices=choices,
-        validate=lambda result: len(result) > 0,
-        invalid_message="Select at least one account",
-    ).execute()
-
-    return selected
-
-
-def select_role(permissions: list[dict]) -> dict:
+def select_role(permissions: list[dict], message: str = "Select role:") -> dict:
     """Interactive single-select for role/permission set."""
     try:
         from InquirerPy import inquirer
+        choices = [
+            {"name": p["name"], "value": p}
+            for p in permissions
+        ]
+        return inquirer.fuzzy(
+            message=message,
+            choices=choices,
+            prompt="> ",
+        ).execute()
     except ImportError:
-        print("InquirerPy not installed. Use --role flag instead, or: pip install InquirerPy")
-        sys.exit(1)
+        # Fallback: numbered menu
+        print(f"\n{message}")
+        for i, p in enumerate(permissions):
+            print(f"  {i + 1}. {p['name']}")
+        while True:
+            val = input("Choice: ").strip()
+            try:
+                idx = int(val) - 1
+                if 0 <= idx < len(permissions):
+                    return permissions[idx]
+            except ValueError:
+                pass
+            print("Invalid choice.")
 
-    choices = [
-        {"name": p["name"], "value": p}
-        for p in permissions
-    ]
 
-    selected = inquirer.select(
-        message="Select role:",
-        choices=choices,
-    ).execute()
-
-    return selected
+def display_role_groups(groups: list[dict]) -> None:
+    """Print a summary of account groups and their available roles."""
+    print()
+    for group in groups:
+        acct_names = [a["name"] for a in group["accounts"]]
+        if len(acct_names) > 3:
+            names_str = ", ".join(acct_names[:3]) + f", ... (+{len(acct_names) - 3} more)"
+        else:
+            names_str = ", ".join(acct_names)
+        role_names = ", ".join(p["name"] for p in group["permissions"])
+        print(f"  {names_str} \u2192 {role_names}")
+    print()
 
 
 def prompt_duration(max_duration: int) -> int:
