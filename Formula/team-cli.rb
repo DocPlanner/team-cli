@@ -3,7 +3,7 @@ class TeamCli < Formula
 
   desc "CLI for AWS TEAM (Temporary Elevated Access Management)"
   homepage "https://github.com/DocPlanner/team-cli"
-  url "https://github.com/DocPlanner/team-cli.git", branch: "main"
+  url "https://github.com/DocPlanner/team-cli.git", tag: "v0.2.0"
   version "0.2.0"
 
 
@@ -15,8 +15,8 @@ class TeamCli < Formula
   end
 
   resource "charset-normalizer" do
-    url "https://files.pythonhosted.org/packages/e4/33/89c2ced2b67d1c2a61c19c6751aa8902d46ce3dacb23600a283619f5a12d/charset_normalizer-3.4.2.tar.gz"
-    sha256 "5baececa9ecba31eff645232d59845c07aa030f0c81ee70184a90d35099a0e63"
+    url "https://files.pythonhosted.org/packages/63/09/c1bc53dab74b1816a00d8d030de5bf98f724c52c1635e07681d312f20be8/charset-normalizer-3.3.2.tar.gz"
+    sha256 "f30c3cb33b24454a82faecaf01b19c18562b1e89558fb6c56de4d9118a032fd5"
   end
 
   resource "idna" do
@@ -56,6 +56,7 @@ class TeamCli < Formula
 
   def install
     virtualenv_install_with_resources
+    bash_completion.install "completions/team.bash" => "team"
   end
 
   test do

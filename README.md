@@ -192,6 +192,14 @@ Accounts already present in `~/.aws/config` (matched by `sso_account_id`) are sk
 
 3. **Sync** — `team sync` reads your TEAM-eligible accounts and permissions, then writes matching SSO profiles into `~/.aws/config`. It creates an `sso-session` block if missing and only adds profiles for permission sets listed in your `profile_map`.
 
+## Bash completions
+
+Installed automatically via Homebrew. For non-Homebrew installs:
+
+```bash
+source /path/to/completions/team.bash
+```
+
 ## License
 
 MIT

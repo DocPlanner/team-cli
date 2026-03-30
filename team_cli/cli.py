@@ -12,7 +12,7 @@ from team_cli.api import (
 )
 from team_cli.config import CONFIG_FILE, load_config, save_config, get_config
 from team_cli.interactive import (
-    with_spinner, select_accounts, select_role,
+    with_spinner, select_accounts, select_role, display_role_groups,
     prompt_duration, prompt_justification_and_ticket,
     format_request_table, format_request_detail,
 )
@@ -21,15 +21,23 @@ from team_cli.audit import fetch_audit_data, format_audit_json, format_audit_tab
 
 
 def _ensure_tokens():
-    """Get valid tokens, handling auth errors gracefully."""
+    """Get valid tokens, handling auth errors gracefully.
+
+    In non-interactive mode (piped stdout), expired sessions exit with an
+    actionable error instead of launching a browser login.
+    """
     try:
         return require_auth()
     except AuthExpiredError:
         clear_tokens()
-        print("Session expired. Logging in again...")
+        if not sys.stdout.isatty():
+            print("Session expired. Run `team login` to re-authenticate.", file=sys.stderr)
+            sys.exit(1)
+        print("Session expired. Logging in again...", file=sys.stderr)
         return auth_login()
     except Exception as e:
         print(f"Authentication error: {e}", file=sys.stderr)
+        print("Run `team login` to re-authenticate, or `team configure` to check your config.", file=sys.stderr)
         sys.exit(1)
 
 
@@ -194,6 +202,26 @@ def _get_permissions_for_account(account_id: str, policy: list[dict]) -> list[di
     return list(perms.values())
 
 
+def _group_accounts_by_roles(selected_accounts: list[dict], policy: list[dict]) -> list[dict]:
+    """Group accounts by their set of available permissions.
+
+    Returns list of {"accounts": [...], "permissions": [...]} sorted by
+    account count descending (largest group first).
+    """
+    groups = {}
+    for acct in selected_accounts:
+        perms = _get_permissions_for_account(acct["id"], policy)
+        perm_key = frozenset(p["id"] for p in perms)
+        if perm_key not in groups:
+            groups[perm_key] = {
+                "accounts": [],
+                "permissions": sorted(perms, key=lambda p: p["name"]),
+            }
+        groups[perm_key]["accounts"].append(acct)
+
+    return sorted(groups.values(), key=lambda g: len(g["accounts"]), reverse=True)
+
+
 def _poll_request(request_id: str, tokens: dict, timeout: int = 600, interval: int = 5) -> dict:
     """Poll a request until it reaches a terminal state or timeout."""
     import time as _time
@@ -299,24 +327,56 @@ def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, 
         print("No accounts selected.")
         return
 
-    # For now, collect all permissions across selected accounts
-    all_perms = {}
-    for acct in selected_accounts:
-        for p in _get_permissions_for_account(acct["id"], policy):
-            all_perms[p["id"]] = p
+    # Group accounts by their available permission sets
+    groups = _group_accounts_by_roles(selected_accounts, policy)
 
-    perms_list = sorted(all_perms.values(), key=lambda p: p["name"])
-    if not perms_list:
+    # Filter out groups with no permissions
+    empty_groups = [g for g in groups if not g["permissions"]]
+    valid_groups = [g for g in groups if g["permissions"]]
+
+    for g in empty_groups:
+        names = ", ".join(a["name"] for a in g["accounts"])
+        print(f"  No permissions available for: {names}. Skipping.")
+
+    if not valid_groups:
         print("No permissions available for selected accounts.")
         return
 
-    if args.role:
-        role = _find_role(args.role, perms_list)
-        if not role:
-            print(f"Role not found: {args.role}")
-            sys.exit(1)
-    else:
-        role = select_role(perms_list)
+    # Show grouping summary when there are multiple groups
+    multiple_groups = len(valid_groups) > 1
+    if multiple_groups:
+        display_role_groups(valid_groups)
+
+    # Role selection per group
+    account_roles = []  # list of (account, role) tuples
+
+    for group in valid_groups:
+        acct_names = [a["name"] for a in group["accounts"]]
+        if len(acct_names) > 3:
+            names_str = ", ".join(acct_names[:3]) + f", ... (+{len(acct_names) - 3} more)"
+        else:
+            names_str = ", ".join(acct_names)
+
+        if args.role:
+            role = _find_role(args.role, group["permissions"])
+            if not role:
+                print(f"Role '{args.role}' not available for: {names_str}")
+                print(f"  Available: {', '.join(p['name'] for p in group['permissions'])}")
+                sys.exit(1)
+        elif len(group["permissions"]) == 1:
+            role = group["permissions"][0]
+            if multiple_groups:
+                print(f"  \u2713 {names_str} \u2192 {role['name']} (auto-selected)")
+        else:
+            msg = "Select role:" if not multiple_groups else f"Select role for {names_str}:"
+            role = select_role(group["permissions"], message=msg)
+
+        for acct in group["accounts"]:
+            account_roles.append((acct, role))
+
+    if not account_roles:
+        print("No valid account/role combinations.")
+        return
 
     duration = args.duration or prompt_duration(max_duration)
     start_time = args.start or datetime.now(timezone.utc).isoformat()
@@ -325,12 +385,11 @@ def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, 
     prev_justification = args.justification
     prev_ticket = args.ticket
 
-    print(f"\nCreating {len(selected_accounts)} request(s)...")
+    print(f"\nCreating {len(account_roles)} request(s)...")
 
     results = []
-    for i, acct in enumerate(selected_accounts):
+    for i, (acct, acct_role) in enumerate(account_roles):
         if prev_justification is None:
-            # First account or user wants different justification
             justification, ticket = prompt_justification_and_ticket(
                 acct["name"],
                 prev_justification if i > 0 else None,
@@ -340,20 +399,17 @@ def _request_interactive_mode(tokens, user, policy, all_accounts, max_duration, 
             justification = prev_justification
             ticket = prev_ticket or ""
             if i == 0:
-                # For first account with pre-set justification, just use it
                 pass
             else:
-                # Ask if they want to reuse
                 justification, ticket = prompt_justification_and_ticket(
                     acct["name"], justification, ticket
                 )
 
-        # After first iteration, store for reuse prompt
         if i == 0 and prev_justification is None:
             prev_justification = justification
             prev_ticket = ticket
 
-        result = _submit_request(tokens, user, acct, role, duration, start_time, justification, ticket)
+        result = _submit_request(tokens, user, acct, acct_role, duration, start_time, justification, ticket)
         if result:
             results.append(result)
 
@@ -756,20 +812,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     # login
-    sub.add_parser("login", help="Authenticate via browser (Cognito/IDC)")
+    sub.add_parser("login", help="Authenticate via browser (Cognito/IDC)",
+        description="Open a browser for Cognito/IDC login using OAuth2 + PKCE. Tokens are cached locally and refreshed automatically.")
 
     # logout
-    sub.add_parser("logout", help="Clear cached tokens")
+    sub.add_parser("logout", help="Clear cached tokens",
+        description="Remove cached authentication tokens. You will need to run `team login` again.")
 
     # accounts
-    accounts_parser = sub.add_parser("accounts", help="List eligible accounts")
+    accounts_parser = sub.add_parser("accounts", help="List eligible accounts",
+        description="Show AWS accounts you can request elevated access to, based on your TEAM eligibility.")
     accounts_parser.add_argument("--json", action="store_true", help="JSON output with permissions per account")
 
     # roles
-    sub.add_parser("roles", help="List available permission sets")
+    sub.add_parser("roles", help="List available permission sets",
+        description="Show permission sets (roles) available across your eligible accounts.")
 
     # request
-    req_parser = sub.add_parser("request", help="Create elevation request")
+    req_parser = sub.add_parser("request", help="Create elevation request",
+        description="Request temporary elevated access. Interactive mode: multi-select accounts, pick role, enter justification. Flag mode: pass all args for scripting. Use --wait to block until approved/rejected. Example: team request -a my-account -r ReadOnly -d 2 -j 'Deploy hotfix' -t INC-123 --wait")
     req_parser.add_argument("--account", "-a", help="Account name or ID (supports partial match)")
     req_parser.add_argument("--role", "-r", help="Permission set name or ID")
     req_parser.add_argument("--duration", "-d", type=int, help="Duration in hours (default: 1)")
@@ -782,36 +843,44 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Max seconds to wait (default: 600)")
 
     # requests
-    sub.add_parser("requests", help="List my requests")
+    sub.add_parser("requests", help="List my requests",
+        description="Show all your elevation requests with status, account, role, and timestamps.")
 
     # status
-    status_parser = sub.add_parser("status", help="Check request status")
+    status_parser = sub.add_parser("status", help="Check request status",
+        description="Show detailed status of a single elevation request including approval state and timeline.")
     status_parser.add_argument("request_id", help="Request ID")
 
     # approve
-    approve_parser = sub.add_parser("approve", help="Approve a pending request")
+    approve_parser = sub.add_parser("approve", help="Approve a pending request",
+        description="Approve an elevation request that is awaiting your approval.")
     approve_parser.add_argument("request_id", help="Request ID")
     approve_parser.add_argument("--comment", "-c", help="Approval comment")
 
     # reject
-    reject_parser = sub.add_parser("reject", help="Reject a pending request")
+    reject_parser = sub.add_parser("reject", help="Reject a pending request",
+        description="Reject an elevation request that is awaiting your approval.")
     reject_parser.add_argument("request_id", help="Request ID")
     reject_parser.add_argument("--comment", "-c", help="Rejection reason")
 
     # revoke
-    revoke_parser = sub.add_parser("revoke", help="Revoke an active/approved request")
+    revoke_parser = sub.add_parser("revoke", help="Revoke an active/approved request",
+        description="Revoke an active or approved elevation request, immediately terminating the session.")
     revoke_parser.add_argument("request_id", help="Request ID")
     revoke_parser.add_argument("--comment", "-c", help="Revoke reason")
 
     # cancel
-    cancel_parser = sub.add_parser("cancel", help="Cancel own pending request")
+    cancel_parser = sub.add_parser("cancel", help="Cancel own pending request",
+        description="Cancel your own pending elevation request before it is approved.")
     cancel_parser.add_argument("request_id", help="Request ID")
 
     # pending
-    sub.add_parser("pending", help="List requests awaiting my approval")
+    sub.add_parser("pending", help="List requests awaiting my approval",
+        description="Show elevation requests from others that are waiting for your approval.")
 
     # audit
-    audit_parser = sub.add_parser("audit", help="Audit elevation requests with CloudTrail events")
+    audit_parser = sub.add_parser("audit", help="Audit elevation requests with CloudTrail events",
+        description="Query elevation request history with optional CloudTrail event correlation. At least one filter is required. JSON output is auto-enabled when piped.")
     audit_parser.add_argument("--actor", help="Filter by requester email")
     audit_parser.add_argument("--account", help="Filter by AWS account ID or name")
     audit_parser.add_argument("--role", help="Filter by permission set name")
@@ -823,10 +892,12 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--limit", type=int, default=100, help="Max requests to process (default: 100)")
 
     # sync
-    sub.add_parser("sync", help="Sync eligible accounts to ~/.aws/config")
+    sub.add_parser("sync", help="Sync eligible accounts to ~/.aws/config",
+        description="Auto-generate SSO profiles in ~/.aws/config for your TEAM-eligible accounts. Requires [sync] section in config.")
 
     # configure
-    configure_parser = sub.add_parser("configure", help="Set up deployment configuration")
+    configure_parser = sub.add_parser("configure", help="Set up deployment configuration",
+        description="Interactive setup wizard for TEAM deployment values (AppSync endpoint, Cognito config, AWS region). Use --show to print current config, --edit to open in $EDITOR. Example: team configure --show")
     configure_parser.add_argument("--show", action="store_true", help="Print current configuration")
     configure_parser.add_argument("--edit", action="store_true", help="Open config in $EDITOR")
 

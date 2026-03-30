@@ -4,3 +4,5 @@ __pycache__/
 dist/
 build/
 *.pyc
+.claude/settings.local.json
+.DS_Store
