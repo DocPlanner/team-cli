@@ -202,4 +202,4 @@ source /path/to/completions/team.bash
 
 ## License
 
-MIT
+MIT/X Consortium (`MIT`). See [LICENSE](LICENSE).

@@ -4,9 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "team-cli"
-version = "0.3.0"
+version = "0.3.1"
 description = "CLI for AWS TEAM (Temporary Elevated Access Management)"
 requires-python = ">=3.11"
+license = { text = "MIT" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "requests>=2.28",
     "InquirerPy>=0.3.4",
