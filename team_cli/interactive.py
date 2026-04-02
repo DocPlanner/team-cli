@@ -182,38 +182,72 @@ def _prompt_justification_and_ticket_basic(account_name: str, prev_j: str | None
     return justification, ticket
 
 
-def format_request_table(requests_list: list[dict]) -> str:
-    """Format requests as a readable table."""
+_STATUS_LEGEND = [
+    ("⏳", "pending",     "Waiting for approver action"),
+    ("📅", "scheduled",   "Approved, session not yet started"),
+    ("⏩", "in progress", "Session currently active"),
+    ("✅", "approved",    "Approved (session may have started)"),
+    ("☑️", "ended",       "Session completed normally"),
+    ("❌", "rejected",    "Rejected by approver"),
+    ("🔄", "revoked",     "Revoked after approval"),
+    ("🚫", "cancelled",   "Cancelled by requester"),
+    ("💤", "expired",     "Expired without action"),
+]
+
+_STATUS_ICON = {s: icon for icon, s, _ in _STATUS_LEGEND}
+
+
+def format_request_table(requests_list: list[dict], show_legend: bool = False) -> str:
+    """Format requests as a readable table with dynamic column widths."""
     if not requests_list:
         return "No requests found."
 
-    # Status icons
-    status_icon = {
-        "pending": "⏳",
-        "approved": "✅",
-        "rejected": "❌",
-        "revoked": "🔄",
-        "cancelled": "🚫",
-        "in progress": "⏩",
-        "scheduled": "📅",
-        "ended": "⏹",
-        "expired": "💤",
-    }
-
-    lines = []
-    lines.append(f"{'ID':<38} {'Account':<22} {'Role':<30} {'Duration':>4}h  {'Status':<12} {'Created'}")
-    lines.append("─" * 130)
-
+    rows = []
     for r in sorted(requests_list, key=lambda x: x.get("createdAt", ""), reverse=True):
-        rid = r.get("id", "")[:36]
-        account = r.get("accountName", "")[:20]
-        role = r.get("role", "")[:28]
-        duration = r.get("duration", "")
         status = r.get("status", "unknown")
-        icon = status_icon.get(status.lower(), "?")
-        created = r.get("createdAt", "")[:19]
+        rows.append({
+            "id":       r.get("id", "")[:36],
+            "account":  r.get("accountName", ""),
+            "role":     r.get("role", ""),
+            "duration": str(r.get("duration", "")),
+            "status":   status,
+            "icon":     _STATUS_ICON.get(status.lower(), "?"),
+            "created":  r.get("createdAt", "")[:19],
+        })
 
-        lines.append(f"{rid:<38} {account:<22} {role:<30} {str(duration):>4}h  {icon} {status:<10} {created}")
+    w_id       = max(len("ID"),       max(len(r["id"])       for r in rows))
+    w_account  = max(len("Account"),  max(len(r["account"])  for r in rows))
+    w_role     = max(len("Role"),     max(len(r["role"])     for r in rows))
+    w_duration = max(len("Dur"),      max(len(r["duration"]) for r in rows))
+    w_status   = max(len("Status"),   max(len(r["status"])   for r in rows))
+    w_created  = len("Created")  # always 19 chars
+
+    header = (
+        f"{'ID':<{w_id}}  "
+        f"{'Account':<{w_account}}  "
+        f"{'Role':<{w_role}}  "
+        f"{'Dur':>{w_duration}}h  "
+        f"   {'Status':<{w_status}}  "
+        f"{'Created'}"
+    )
+    total = len(header)
+
+    lines = [header, "─" * total]
+    for r in rows:
+        lines.append(
+            f"{r['id']:<{w_id}}  "
+            f"{r['account']:<{w_account}}  "
+            f"{r['role']:<{w_role}}  "
+            f"{r['duration']:>{w_duration}}h  "
+            f"{r['icon']} {r['status']:<{w_status}}  "
+            f"{r['created']}"
+        )
+
+    if show_legend:
+        lines.append("")
+        lines.append("Status legend:")
+        for icon, name, description in _STATUS_LEGEND:
+            lines.append(f"  {icon} {name:<12}  {description}")
 
     return "\n".join(lines)
 

@@ -464,7 +464,17 @@ def cmd_requests(args):
     with with_spinner("Fetching requests..."):
         reqs = get_requests_by_email(user["email"], tokens)
 
-    print(format_request_table(reqs))
+    if args.status:
+        statuses = {s.lower() for s in args.status}
+        reqs = [r for r in reqs if r.get("status", "").lower() in statuses]
+
+    limit = args.n
+    truncated = len(reqs) > limit
+    reqs = reqs[:limit]
+
+    print(format_request_table(reqs, show_legend=True))
+    if truncated:
+        print(f"\n(showing {limit} most recent — use -n to change limit)")
 
 
 def cmd_status(args):
@@ -843,8 +853,13 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Max seconds to wait (default: 600)")
 
     # requests
-    sub.add_parser("requests", help="List my requests",
-        description="Show all your elevation requests with status, account, role, and timestamps.")
+    requests_parser = sub.add_parser("requests", help="List my requests",
+        description="Show your elevation requests with status, account, role, and timestamps.")
+    requests_parser.add_argument("-n", type=int, default=10, metavar="N",
+        help="Max number of requests to show (default: 10)")
+    requests_parser.add_argument("--status", action="append", metavar="STATUS",
+        help="Filter by status; can be repeated. "
+             "Allowed: pending, approved, rejected, revoked, cancelled, in progress, scheduled, ended, expired")
 
     # status
     status_parser = sub.add_parser("status", help="Check request status",
