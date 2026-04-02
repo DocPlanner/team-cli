@@ -456,9 +456,6 @@ def _submit_request(tokens, user, account, role, duration, start_time, justifica
         return None
 
 
-_DEFAULT_STATUSES = {"pending", "approved", "rejected", "in progress", "scheduled", "expired"}
-
-
 def cmd_requests(args):
     """team requests — list my requests."""
     tokens = _ensure_tokens()
@@ -467,8 +464,8 @@ def cmd_requests(args):
     with with_spinner("Fetching requests..."):
         reqs = get_requests_by_email(user["email"], tokens)
 
-    if not args.all:
-        statuses = {s.lower() for s in args.status} if args.status else _DEFAULT_STATUSES
+    if args.status:
+        statuses = {s.lower() for s in args.status}
         reqs = [r for r in reqs if r.get("status", "").lower() in statuses]
 
     limit = args.n
@@ -861,10 +858,8 @@ def build_parser() -> argparse.ArgumentParser:
     requests_parser.add_argument("-n", type=int, default=10, metavar="N",
         help="Max number of requests to show (default: 10)")
     requests_parser.add_argument("--status", action="append", metavar="STATUS",
-        help="Filter by status; can be repeated (default: all except ended/cancelled/revoked). "
+        help="Filter by status; can be repeated. "
              "Allowed: pending, approved, rejected, revoked, cancelled, in progress, scheduled, ended, expired")
-    requests_parser.add_argument("--all", action="store_true",
-        help="Show all requests regardless of status")
 
     # status
     status_parser = sub.add_parser("status", help="Check request status",
