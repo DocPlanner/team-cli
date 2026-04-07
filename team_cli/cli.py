@@ -468,13 +468,17 @@ def cmd_requests(args):
         statuses = {s.lower() for s in args.status}
         reqs = [r for r in reqs if r.get("status", "").lower() in statuses]
 
-    limit = args.n
-    truncated = len(reqs) > limit
-    reqs = reqs[:limit]
+    reqs.sort(key=lambda r: r.get("createdAt") or "", reverse=True)
 
-    print(format_request_table(reqs, show_legend=True))
-    if truncated:
-        print(f"\n(showing {limit} most recent — use -n to change limit)")
+    if not args.all:
+        limit = args.n
+        truncated = len(reqs) > limit
+        reqs = reqs[:limit]
+        print(format_request_table(reqs, show_legend=True))
+        if truncated:
+            print(f"\n(showing {limit} most recent — use --all to show all or -n to change limit)")
+    else:
+        print(format_request_table(reqs, show_legend=True))
 
 
 def cmd_status(args):
@@ -857,6 +861,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Show your elevation requests with status, account, role, and timestamps.")
     requests_parser.add_argument("-n", type=int, default=10, metavar="N",
         help="Max number of requests to show (default: 10)")
+    requests_parser.add_argument("--all", action="store_true",
+        help="Show all requests (ignores -n)")
     requests_parser.add_argument("--status", action="append", metavar="STATUS",
         help="Filter by status; can be repeated. "
              "Allowed: pending, approved, rejected, revoked, cancelled, in progress, scheduled, ended, expired")
