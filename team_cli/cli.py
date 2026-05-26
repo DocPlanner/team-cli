@@ -145,7 +145,7 @@ def cmd_request(args):
         sys.exit(1)
 
     policy = policy_data["policy"]
-    max_duration = int(settings.get("duration", 9)) if settings else 9
+    max_duration = int(settings.get("duration") or 9) if settings else 9
 
     # Build flat lists
     all_accounts = {}
