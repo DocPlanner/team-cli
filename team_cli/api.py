@@ -78,38 +78,64 @@ def get_user_policy(tokens: dict) -> dict:
 
     The TEAM backend getUserPolicy is async (fires a Lambda and returns immediately
     with policy: null). The frontend catches the result via GraphQL subscription.
-    Instead, we compute the policy directly: look up each group's eligibility,
-    resolve OUs to accounts, and build the combined policy.
+    Instead, we compute the policy directly: list eligibilities once, filter by
+    the user's identities, resolve OUs to accounts, and build the combined policy.
     """
     from team_cli.queries import GET_ELIGIBILITY, GET_OU_ACCOUNTS
     user = get_user_info(tokens)
+    identity_ids = _identity_ids(user)
+
+    try:
+        eligibilities = _list_matching_eligibilities(tokens, identity_ids)
+    except AuthExpiredError:
+        raise
+    except APIError:
+        eligibilities = _get_matching_eligibilities_by_id(tokens, identity_ids, GET_ELIGIBILITY)
+
+    eligibility_by_id = {
+        eligibility.get("id"): eligibility
+        for eligibility in eligibilities
+        if eligibility and eligibility.get("id")
+    }
+    ordered_eligibilities = [
+        eligibility_by_id[identity_id]
+        for identity_id in identity_ids
+        if identity_id in eligibility_by_id
+    ]
+
+    ou_ids = []
+    seen_ou_ids = set()
+    for eligibility in ordered_eligibilities:
+        for ou in eligibility.get("ous") or []:
+            ou_id = ou.get("id")
+            if ou_id and ou_id not in seen_ou_ids:
+                seen_ou_ids.add(ou_id)
+                ou_ids.append(ou_id)
+
+    ou_account_map = {}
+    if ou_ids:
+        ou_data = execute(GET_OU_ACCOUNTS, {"ouIds": ou_ids}, tokens)
+        for result in (ou_data.get("getOUAccounts") or {}).get("results") or []:
+            ou_id = result.get("ouId")
+            if ou_id:
+                ou_account_map[ou_id] = result.get("accounts") or []
 
     policy_entries = []
     max_duration = 0
 
-    for gid in [user["user_id"]] + user["group_ids"]:
-        if not gid:
-            continue
-        data = execute(GET_ELIGIBILITY, {"id": gid}, tokens)
-        elig = data.get("getEligibility")
-        if not elig:
-            continue
-
-        duration = int(elig.get("duration") or 0)
+    for eligibility in ordered_eligibilities:
+        duration = int(eligibility.get("duration") or 0)
         if duration > max_duration:
             max_duration = duration
 
-        accounts = list(elig.get("accounts") or [])
-        ou_ids = [ou["id"] for ou in (elig.get("ous") or [])]
-        if ou_ids:
-            ou_data = execute(GET_OU_ACCOUNTS, {"ouIds": ou_ids}, tokens)
-            for result in (ou_data.get("getOUAccounts") or {}).get("results") or []:
-                accounts.extend(result.get("accounts") or [])
+        accounts = list(eligibility.get("accounts") or [])
+        for ou in eligibility.get("ous") or []:
+            accounts.extend(ou_account_map.get(ou.get("id"), []))
 
         policy_entries.append({
             "accounts": accounts,
-            "permissions": elig.get("permissions") or [],
-            "approvalRequired": elig.get("approvalRequired", False),
+            "permissions": eligibility.get("permissions") or [],
+            "approvalRequired": eligibility.get("approvalRequired", False),
             "duration": str(max_duration),
         })
 
@@ -118,6 +144,57 @@ def get_user_policy(tokens: dict) -> dict:
         "policy": policy_entries if policy_entries else None,
         "username": user.get("username", ""),
     }
+
+
+def _identity_ids(user: dict) -> list[str]:
+    ids = []
+    seen = set()
+    for identity_id in [user.get("user_id")] + list(user.get("group_ids") or []):
+        if identity_id and identity_id not in seen:
+            seen.add(identity_id)
+            ids.append(identity_id)
+    return ids
+
+
+def _list_matching_eligibilities(tokens: dict, identity_ids: list[str]) -> list[dict]:
+    from team_cli.queries import LIST_ELIGIBILITIES
+
+    identity_id_set = set(identity_ids)
+    eligibilities = []
+    next_token = None
+
+    while True:
+        variables = {"limit": 1000}
+        if next_token:
+            variables["nextToken"] = next_token
+
+        data = execute(LIST_ELIGIBILITIES, variables, tokens)
+        result = data.get("listEligibilities") or {}
+        eligibilities.extend(
+            eligibility
+            for eligibility in (result.get("items") or [])
+            if eligibility and eligibility.get("id") in identity_id_set
+        )
+
+        next_token = result.get("nextToken")
+        if not next_token:
+            break
+
+    return eligibilities
+
+
+def _get_matching_eligibilities_by_id(
+    tokens: dict,
+    identity_ids: list[str],
+    query: str,
+) -> list[dict]:
+    eligibilities = []
+    for identity_id in identity_ids:
+        data = execute(query, {"id": identity_id}, tokens)
+        eligibility = data.get("getEligibility")
+        if eligibility:
+            eligibilities.append(eligibility)
+    return eligibilities
 
 
 def get_requests_by_email(email: str, tokens: dict, status: dict | None = None) -> list:

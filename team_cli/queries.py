@@ -111,6 +111,24 @@ query GetEligibility($id: ID!) {
 }
 """
 
+LIST_ELIGIBILITIES = """
+query ListEligibilities($limit: Int, $nextToken: String) {
+  listEligibilities(limit: $limit, nextToken: $nextToken) {
+    items {
+      id
+      name
+      type
+      duration
+      approvalRequired
+      accounts { name id }
+      permissions { name id }
+      ous { name id }
+    }
+    nextToken
+  }
+}
+"""
+
 GET_OU_ACCOUNTS = """
 query GetOUAccounts($ouIds: [String]!) {
   getOUAccounts(ouIds: $ouIds) {
