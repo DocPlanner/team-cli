@@ -3,8 +3,8 @@ class TeamCli < Formula
 
   desc "CLI for AWS TEAM (Temporary Elevated Access Management)"
   homepage "https://github.com/DocPlanner/team-cli"
-  url "https://github.com/DocPlanner/team-cli.git", tag: "v0.3.2"
-  version "0.3.2"
+  url "https://github.com/DocPlanner/team-cli.git", tag: "v0.3.3"
+  version "0.3.3"
   license "MIT"
 
 
